@@ -2,8 +2,9 @@ import telebot
 from telebot import types
 import sqlite3
 import threading
+from mytoken import EXACT_TOKEN_TYPES
 
-bot = telebot.TeleBot("5946939423:AAHjqwfBDMWDjd4xK_T2yGiSsT-mkir_7pk", parse_mode=None)
+bot = telebot.TeleBot(EXACT_TOKEN_TYPES, parse_mode=None)
 user_action = None
 
 # Połączenie z bazą danych
