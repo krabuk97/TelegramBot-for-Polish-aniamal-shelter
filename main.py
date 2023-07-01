@@ -4,90 +4,127 @@ import sqlite3
 import threading
 from mytoken import EXACT_TOKEN_TYPES
 
-bot = telebot.TeleBot(EXACT_TOKEN_TYPES, parse_mode=None)
-user_action = None
 
-# Połączenie z bazą danych
-conn = sqlite3.connect("address.db", check_same_thread=False)
-cur = conn.cursor()
-cur.execute("CREATE TABLE IF NOT EXISTS address (address_text TEXT)")
+class StartHandler:
+    def __init__(self, bot):
+        self.bot = bot
 
-# Blokada do synchronizacji dostępu do bazy danych
-db_lock = threading.Lock()
-
-
-@bot.message_handler(commands=['start'])
-def start_handler(message):
-    global user_action
-    user_action = None
-    markup = types.ReplyKeyboardMarkup()
-    alert_button = types.KeyboardButton("Nowe zgloszenie")
-    list_button = types.KeyboardButton("Lista zgloszen")
-    search_button = types.KeyboardButton("Szukaj zgloszenia")
-    markup.add(alert_button, list_button, search_button)
-    bot.send_message(message.chat.id, "Zaczynamy!!!", reply_markup=markup)
+    def handle(self, message):
+        markup = types.ReplyKeyboardMarkup()
+        alert_button = types.KeyboardButton("Nowe zgłoszenie")
+        list_button = types.KeyboardButton("Lista zgłoszeń")
+        search_button = types.KeyboardButton("Szukaj zgłoszenia")
+        markup.add(alert_button, list_button, search_button)
+        self.bot.send_message(message.chat.id, "Zaczynamy!!!", reply_markup=markup)
 
 
-@bot.message_handler(func=lambda message: message.text == "Nowe zgloszenie")
-def add_alert_handler(message):
-    global user_action
-    user_action = "add"
-    bot.send_message(message.chat.id, "Wpisz dane zgłoszenia:")
+class AddAlertHandler:
+    def __init__(self, bot, db_lock, cur, conn):
+        self.bot = bot
+        self.db_lock = db_lock
+        self.cur = cur
+        self.conn = conn
+
+    def handle(self, message):
+        self.bot.send_message(message.chat.id, "Wpisz dane zgłoszenia:")
+
+        @self.bot.message_handler(func=lambda m: True)
+        def save_alert(message):
+            address_text = message.text
+
+            with self.db_lock:
+                self.cur.execute('INSERT INTO address (address_text) VALUES (?)', (address_text,))
+                self.conn.commit()
+
+            self.bot.send_message(message.chat.id, "Zgłoszenie zapisano.")
+
+        self.bot.register_next_step_handler(message, save_alert)
 
 
-@bot.message_handler(func=lambda message: message.text == "Lista zgloszen")
-def list_alert_handler(message):
-    with db_lock:
-        cur.execute("SELECT address_text FROM address")
-        results = cur.fetchall()
+class ListAlertHandler:
+    def __init__(self, bot, db_lock, cur):
+        self.bot = bot
+        self.db_lock = db_lock
+        self.cur = cur
 
-    if results:
-        formatted_results = "\n".join([result[0] for result in results])
-        bot.send_message(message.chat.id, "Lista zgłoszeń:\n" + formatted_results)
-    else:
-        bot.send_message(message.chat.id, "Brak zgłoszeń.")
+    def handle(self, message):
+        with self.db_lock:
+            self.cur.execute("SELECT address_text FROM address")
+            results = self.cur.fetchall()
 
-
-@bot.message_handler(func=lambda message: message.text == "Szukaj zgloszenia")
-def search_handler(message):
-    global user_action
-    user_action = "search"
-    bot.send_message(message.chat.id, "Wpisz frazę do wyszukania:")
+        if results:
+            formatted_results = "\n".join([result[0] for result in results])
+            self.bot.send_message(message.chat.id, "Lista zgłoszeń:\n" + formatted_results)
+        else:
+            self.bot.send_message(message.chat.id, "Brak zgłoszeń.")
 
 
-@bot.message_handler(func=lambda
-        message: message.text != "Szukaj zgloszenia" and message.text != "Nowe zgloszenie" and message.text != "Lista zgloszen")
-def save_or_search_handler(message):
-    global user_action
+class SearchHandler:
+    def __init__(self, bot, db_lock, cur):
+        self.bot = bot
+        self.db_lock = db_lock
+        self.cur = cur
 
-    if user_action == "add":
-        address_text = message.text
+    def handle(self, message):
+        self.bot.send_message(message.chat.id, "Wpisz frazę do wyszukania:")
 
-        with db_lock:
-            # Zapisywanie adresu do bazy danych
-            cur.execute('INSERT INTO address (address_text) VALUES (?)', (address_text,))
-            conn.commit()
-
-        bot.send_message(message.chat.id, "Zgłoszenie zapisano.")
-        user_action = None
-        start_handler(message)
-
-    elif user_action == "search":
-        search_term = message.text
-
-        with db_lock:
-            # Wyszukiwanie zgłoszeń w bazie danych
-            cur.execute('SELECT address_text FROM address WHERE address_text LIKE ?', ('%' + search_term + '%',))
-            results = cur.fetchall()
+        @self.bot.message_handler(func=lambda m: True)
+        def search_alert(message):
+            search_term = message.text
+            with self.db_lock:
+                self.cur.execute('SELECT address_text FROM address WHERE address_text LIKE ?', ('%' + search_term + '%',))
+                results = self.cur.fetchall()
 
             if results:
                 formatted_results = "\n".join([result[0] for result in results])
-                bot.send_message(message.chat.id, "Znalezione zgłoszenia:\n" + formatted_results)
+                self.bot.send_message(message.chat.id, "Znalezione zgłoszenia:\n" + formatted_results)
             else:
-                bot.send_message(message.chat.id, "Nie znaleziono zgłoszenia.")
+                self.bot.send_message(message.chat.id, "Nie znaleziono zgłoszenia.")
 
-            user_action = None
-            start_handler(message)
+        self.bot.register_next_step_handler(message, search_alert)
 
 
-bot.polling(none_stop=True)
+class AddressBot:
+    def __init__(self, token):
+        self.bot = telebot.TeleBot(token, parse_mode=None)
+
+        # Połączenie z bazą danych
+        self.conn = sqlite3.connect("address.db", check_same_thread=False)
+        self.cur = self.conn.cursor()
+        self.cur.execute("CREATE TABLE IF NOT EXISTS address (address_text TEXT)")
+
+        # Blokada do synchronizacji dostępu do bazy danych
+        self.db_lock = threading.Lock()
+
+        self.start_handler = StartHandler(self.bot)
+        self.add_alert_handler = AddAlertHandler(self.bot, self.db_lock, self.cur, self.conn)
+        self.list_alert_handler = ListAlertHandler(self.bot, self.db_lock, self.cur)
+        self.search_handler = SearchHandler(self.bot, self.db_lock, self.cur)
+
+        self.register_handlers()
+
+    def register_handlers(self):
+        @self.bot.message_handler(commands=['start'])
+        def start(message):
+            self.start_handler.handle(message)
+
+        @self.bot.message_handler(func=lambda message: message.text == "Nowe zgłoszenie")
+        def add_alert(message):
+            self.add_alert_handler.handle(message)
+
+        @self.bot.message_handler(func=lambda message: message.text == "Lista zgłoszeń")
+        def list_alert(message):
+            self.list_alert_handler.handle(message)
+
+        @self.bot.message_handler(func=lambda message: message.text == "Szukaj zgłoszenia")
+        def search(message):
+            self.search_handler.handle(message)
+
+    def run(self):
+        self.bot.polling(none_stop=True)
+
+
+TOKEN = EXACT_TOKEN_TYPES
+
+bot = AddressBot(TOKEN)
+bot.run()
