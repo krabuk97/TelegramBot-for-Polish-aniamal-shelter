@@ -88,12 +88,12 @@ class AddressBot:
     def __init__(self, token):
         self.bot = telebot.TeleBot(token, parse_mode=None)
 
-        # Połączenie z bazą danych
+      
         self.conn = sqlite3.connect("address.db", check_same_thread=False)
         self.cur = self.conn.cursor()
         self.cur.execute("CREATE TABLE IF NOT EXISTS address (address_text TEXT)")
 
-        # Blokada do synchronizacji dostępu do bazy danych
+       
         self.db_lock = threading.Lock()
 
         self.start_handler = StartHandler(self.bot)
